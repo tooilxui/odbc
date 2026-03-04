@@ -1980,7 +1980,12 @@ func TestMSSQLQueryContextCancel(t *testing.T) {
 }
 
 // https://github.com/alexbrainman/odbc/issues/178
-func TestMSSQLIssue178(t *testing.T) {
+// verify that inserting unicode text into an NVARCHAR column
+// with a specified collation preserves the original characters when
+// the parameter is sent from Go.  The collation on NVARCHAR only affects
+// comparisons and sort order, not storage.  This test reproduces
+// behavior originally reported in issue #178.
+func TestMSSQLNVarcharCollationPreservesUnicode(t *testing.T) {
 	db, sc, err := mssqlConnect()
 	if err != nil {
 		t.Fatal(err)

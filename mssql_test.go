@@ -2059,3 +2059,68 @@ func TestMSSQLIssue178(t *testing.T) {
 		})
 	}
 }
+
+// https://github.com/alexbrainman/odbc/issues/178
+// verify that an SQL statement which provides a parameter description
+// causes BindValue to honor the described size rather than the length of
+// the actual string.  this test will fail if the size override lines in
+// param.go are removed (they were added in #178).
+func TestMSSQLDescribeParameterSize(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skip in short mode")
+	}
+	db, _, err := mssqlConnectWithParams(newConnParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// first, make sure the driver actually describes the parameter and returns
+	// the expected size.  we use the Raw method to gain access to the
+	// underlying *Conn and call PrepareODBCStmt directly.
+	conn, err2 := db.Conn(context.Background())
+	if err2 != nil {
+		t.Fatalf("failed to get raw connection: %v", err2)
+	}
+	defer conn.Close()
+	err = conn.Raw(func(dc interface{}) error {
+		c := dc.(*Conn)
+		stmt, err := c.PrepareODBCStmt("select cast(? as varchar(5))")
+		if err != nil {
+			return err
+		}
+		if len(stmt.Parameters) != 1 {
+			return fmt.Errorf("unexpected param count %d", len(stmt.Parameters))
+		}
+		p := stmt.Parameters[0]
+		if !p.isDescribed || p.Size != 5 {
+			return fmt.Errorf("expected described size 5, got isDescribed=%v size=%d", p.isDescribed, p.Size)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// intercept SQLBindParameter to capture the size argument used by BindValue
+	var boundSize api.SQLULEN
+	orig := sqlBindParameter
+	sqlBindParameter = func(h api.SQLHSTMT, paramNumber api.SQLUSMALLINT,
+		inputOutputType api.SQLSMALLINT, cType api.SQLSMALLINT, sqlType api.SQLSMALLINT,
+		size api.SQLULEN, decimal api.SQLSMALLINT,
+		buffer api.SQLPOINTER, bufferLength api.SQLLEN, strLenOrIndPtr *api.SQLLEN,
+	) api.SQLRETURN {
+		boundSize = size
+		return orig(h, paramNumber, inputOutputType, cType, sqlType,
+			size, decimal, buffer, bufferLength, strLenOrIndPtr)
+	}
+	defer func() { sqlBindParameter = orig }()
+
+	// execute the statement once; the cast will raise a truncation error when
+	// the input exceeds five characters, but that is irrelevant to capturing
+	// the bound size.
+	_, _ = db.Exec("select cast(? as varchar(5))", "abcdef")
+	if boundSize != 5 {
+		t.Fatalf("expected bound size 5, got %d", boundSize)
+	}
+}

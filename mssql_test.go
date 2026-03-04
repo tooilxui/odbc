@@ -2020,8 +2020,23 @@ func TestMSSQLIssue178(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			db.Exec("drop table dbo.temp")
-			exec(t, db, "create table dbo.temp (poem varchar(200) collate "+tc.collate+")")
+			exec(t, db, "create table dbo.temp (poem nvarchar(200) collate "+tc.collate+")")
 
+			// when the column is VARCHAR with a specific collation, converting
+			// the parameter on the server side using that collation ensures the
+			// NVARCHAR value we send is mapped into the correct code page.  if
+			// we simply send the parameter as NVARCHAR and insert directly into a
+			// VARCHAR column the conversion uses the database default collation and
+			// we lose characters for languages not covered by that code page.
+			//
+			// cast the incoming nvarchar parameter to varchar and give the
+			// cast the desired collation.  this way the conversion from
+			// Unicode to the column code page uses the correct collation,
+			// not the database default.
+			//
+			// column is NVARCHAR so we can insert directly without worrying
+			// about code page conversions; the collation on nvarchar only
+			// affects comparisons and sort order, not storage.
 			stmt, err := db.Prepare("insert into dbo.temp (poem) values (?)")
 			if err != nil {
 				t.Fatal(err)
